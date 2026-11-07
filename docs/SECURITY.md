@@ -1,19 +1,13 @@
-# Security notes
+# Security and Threat Model
 
-## Threat model
+## Threat Model
 
-`trysac-agent-checkpoint` is a pure library without I/O. The main risks are:
+- **Defended**: Path traversal via `run_id` (enforced by regex). State tampering/corruption via torn writes (enforced by recovery). Resource exhaustion via payload size and step count limits. Secrets leakage in event listeners.
+- **Not Defended**: Concurrent access (no thread safety, handled by file locking). Remote state injection.
 
-- **Supply chain**: a compromised dependency or CI action. Mitigation: no runtime dependencies,
-  Dependabot weekly updates, actions pinned to major versions, minimal workflow permissions.
-- **Leaked secrets**: tokens committed by mistake. Mitigation: `gitleaks` runs in the local gates
-  and in CI; `.env` files are git-ignored.
-- **Untrusted input**: callers may pass hostile strings. Mitigation: validate input and fail with
-  explicit exceptions; never `eval`, `exec` or deserialize untrusted data.
+## Limits
 
-## Publishing
-
-Releases are published to PyPI with trusted publishing (OIDC) when available, never with a
-long-lived token stored in the repository.
-
-To report a vulnerability, see [SECURITY.md](../SECURITY.md).
+- **Run ID**: Must match `^[A-Za-z0-9_-]{1,64}$`.
+- **Entry Size**: Max `1_048_576` bytes by default.
+- **Steps**: Max `10_000` steps per run by default.
+- **Serialization**: `allow_nan=False` prevents invalid JSON encoding; arbitrary object pickling is strictly forbidden.
