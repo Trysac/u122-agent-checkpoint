@@ -127,42 +127,37 @@ class RunLog:
             self._file = open(self._log_path, "a+", encoding="utf-8")  # noqa: SIM115
             return
 
+        # Read line by line (the spec): memory is bounded by the longest record.
+        valid_records: list[dict[str, Any]] = []
+        valid_byte_length = 0
+        total_bytes = 0
         with open(self._log_path, "rb") as f:
-            data = f.read()
+            for i, raw in enumerate(f):
+                total_bytes += len(raw)
+                if raw == b"\n":
+                    valid_byte_length += 1
+                    continue
+                try:
+                    record = json.loads(raw.rstrip(b"\n").decode("utf-8"))
+                except Exception as err:
+                    if not raw.endswith(b"\n"):  # the last line without a newline is a torn write
+                        logger.warning(
+                            "Detected torn tail line in run %s; truncating", self._run_id
+                        )
+                        break
+                    raise CheckpointError("corrupt_log", f"Line {i} corrupted: {err}") from err
 
-        if not data:
+                if not isinstance(record, dict) or record.get("v") != 1:
+                    raise CheckpointError("corrupt_log", f"Line {i} is not a valid v1 record")
+
+                valid_records.append(record)
+                valid_byte_length += len(raw)
+
+        if total_bytes == 0:
             self._file = open(self._log_path, "a+", encoding="utf-8")  # noqa: SIM115
             return
 
-        raw_lines = data.split(b"\n")
-        valid_records: list[dict[str, Any]] = []
-        valid_byte_length = 0
-
-        for i, raw_line in enumerate(raw_lines):
-            if not raw_line:
-                if i < len(raw_lines) - 1:
-                    valid_byte_length += 1
-                continue
-
-            try:
-                text = raw_line.decode("utf-8")
-                record = json.loads(text)
-            except Exception as err:
-                is_last_item = i == len(raw_lines) - 1
-                has_trailing_newline = data.endswith(b"\n")
-                if is_last_item and not has_trailing_newline:
-                    logger.warning("Detected torn tail line in run %s; truncating", self._run_id)
-                    break
-                raise CheckpointError("corrupt_log", f"Line {i} corrupted: {err}") from err
-
-            if not isinstance(record, dict) or record.get("v") != 1:
-                raise CheckpointError("corrupt_log", f"Line {i} is not a valid v1 record")
-
-            valid_records.append(record)
-            line_bytes_len = len(raw_line) + 1
-            valid_byte_length += line_bytes_len
-
-        if valid_byte_length < len(data):
+        if valid_byte_length < total_bytes:
             with open(self._log_path, "r+b") as f:
                 f.truncate(valid_byte_length)
                 f.flush()
@@ -479,18 +474,17 @@ class CheckpointStore:
                 status: RunStatus = "running"
                 try:
                     with open(entry, "rb") as f:
-                        lines = f.read().split(b"\n")
-                    for line in lines:
-                        stripped = line.strip()
-                        if not stripped:
-                            continue
-                        with contextlib.suppress(Exception):
-                            data = json.loads(stripped.decode("utf-8"))
-                            if isinstance(data, dict) and data.get("status") in (
-                                "completed",
-                                "failed",
-                            ):
-                                status = data["status"]
+                        for line in f:  # line by line: memory is bounded by one record
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            with contextlib.suppress(Exception):
+                                data = json.loads(stripped.decode("utf-8"))
+                                if isinstance(data, dict) and data.get("status") in (
+                                    "completed",
+                                    "failed",
+                                ):
+                                    status = data["status"]
                 except OSError:
                     pass
                 runs.append((run_id, status))
