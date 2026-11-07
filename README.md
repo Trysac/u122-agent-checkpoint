@@ -1,48 +1,47 @@
 # agent-checkpoint
 
-[![PyPI version](https://img.shields.io/pypi/v/trysac-agent-checkpoint)](https://pypi.org/project/trysac-agent-checkpoint/)
-[![License: MIT](https://img.shields.io/pypi/l/trysac-agent-checkpoint)](LICENSE)
-[![CI](https://github.com/Trysac/u122-agent-checkpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/Trysac/u122-agent-checkpoint/actions/workflows/ci.yml)
+[![CI](https://github.com/Trysac/u122-agent-checkpoint/actions/workflows/ci.yml/badge.svg)](https://github.com/Trysac/u122-agent-checkpoint/actions)
 
-Checkpoint and resume agent runs from an append-only JSONL log: recorded steps replay without re-execution, divergence detection, torn-tail recovery and terminal states
+Checkpoint and resume agent runs from an append-only JSONL log: recorded steps replay without re-execution, divergence detection, torn-tail recovery and terminal states.
 
-## Problem
+## The Problem
 
-Describe in two or three sentences the concrete problem this utility solves, who hits it, and what
-they do today without it. Replace this paragraph when the first real feature lands.
+Long agent runs fail halfway through on a timeout or a crash, and restarting them repeats every LLM call and tool side effect already paid for. Resuming needs a log of completed steps keyed by their inputs, so that the rerun returns recorded results until it reaches new work. This library records steps to an append-only file and replays them deterministically on resume.
 
-## Install
+## Installation
 
-```sh
+```bash
 pip install trysac-agent-checkpoint
-# or
-uv add trysac-agent-checkpoint
 ```
 
-Requires Python 3.10 or newer. No runtime dependencies.
-
-## Usage
+## Usage Example
 
 ```python
-import agent_checkpoint
+from agent_checkpoint import CheckpointStore
 
-# normalize() trims surrounding whitespace and lower-cases the text.
-print(agent_checkpoint.normalize("  Hello World "))  # -> "hello world"
+store = CheckpointStore(".checkpoints")
+with store.open("run-001") as log:
+    data = log.step("fetch", {"url": "https://example.org"}, lambda: "fetched")
+    result = log.step("process", {"payload": data}, lambda: f"processed: {data}")
+    log.complete(result)
 
-# Blank input is rejected explicitly instead of returning an empty string.
-try:
-    agent_checkpoint.normalize("   ")
-except ValueError as exc:
-    print(f"rejected: {exc}")
+assert store.list_runs() == [("run-001", "completed")]
 ```
+
+## Public API Summary
+
+- `CheckpointStore(directory: str | os.PathLike, *, max_entry_bytes: int = 1_048_576, max_steps: int = 10_000, on_event: Callable[[dict], None] | None = None)`: Filesystem-backed storage container.
+- `CheckpointStore.open(run_id: str, *, on_divergence: Literal['raise','truncate'] = 'raise', break_lock: bool = False) -> RunLog`: Opens or creates a run log. `run_id` must match `^[A-Za-z0-9_-]{1,64}$`.
+- `CheckpointStore.list_runs() -> list[tuple[str, str]]`: Lists all runs and their statuses, sorted by ID.
+- `RunLog.step(name: str, inputs: Any, fn: Callable[[], T]) -> T`: Executes `fn` and records the result if not replaying.
+- `RunLog.complete(result: Any = None)` / `RunLog.fail(code: str)`: Marks the run as terminated.
+- `CheckpointError(code, message, step_index)`: Raised for `divergence`, `not_serializable`, `run_completed`, `locked`, `entry_too_large`, `too_many_steps`, `invalid_run_id`, or `corrupt_log`.
+- `canonical_hash(value: Any) -> str`: SHA-256 hex digest of the canonical JSON of the value.
+
+## Why not LangGraph checkpointers?
+
+This library is framework-free, uses plain JSONL which is human-readable, and implements explicit divergence handling rather than relying on framework-specific state management.
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) and [decisions](docs/decisions/)
-- [Testing](docs/TESTING.md) and [security](docs/SECURITY.md)
-- [Project record](docs/PROJECT.md) and [stack](docs/STACK.md)
-- [Changelog](CHANGELOG.md) and [contributing guide](CONTRIBUTING.md)
-
-## License
-
-[MIT](LICENSE) (c) 2026 Miguel Gomez
+See [docs/SECURITY.md](docs/SECURITY.md) for the threat model.

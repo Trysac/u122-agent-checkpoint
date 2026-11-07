@@ -1,20 +1,12 @@
 # Testing
 
-## Running
+Tests are located in `tests/test_agent_checkpoint.py`.
 
-```sh
-uv run pytest --cov=agent_checkpoint   # tests with coverage report
-uv run python scripts/check.py      # every gate, as CI and the factory run it
-```
+## Coverage
 
-## Policy
-
-- Branch coverage of `src/agent_checkpoint` must stay at or above 80 %; the gate fails below it.
-- Tests exercise the public API (`import agent_checkpoint`) and assert every observable effect:
-  return values, raised exceptions and their messages.
-- Each bug fix starts with a failing test that reproduces it.
-- Tests are deterministic: no network, no wall clock, no dependence on test order.
-
-## Layout
-
-`tests/test_<module>.py` mirrors each public module. Shared fixtures go in `tests/conftest.py`.
+- **First run**: Verifies `log.step` calls `fn` and persists records.
+- **Replay**: Verifies `step` returns stored results without calling `fn`.
+- **Divergence**: Verifies `on_divergence='raise'` detects mismatches and `on_divergence='truncate'` recovers correctly.
+- **Torn Tail**: Simulates partial JSON lines and verifies truncation on load.
+- **Terminal states**: Verifies `complete()` and `fail()` prevent further steps.
+- **Edge cases**: Handles floats/ints, `None` outputs, and Windows-safe file replacement.

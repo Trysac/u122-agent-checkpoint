@@ -1,29 +1,42 @@
 # Architecture
 
-## Purpose
+`agent_checkpoint` is designed as a filesystem-backed, deterministic execution logger and replay engine for agentic workflows.
 
-`trysac-agent-checkpoint` is a small, dependency-free Python library: Checkpoint and resume agent runs from an append-only JSONL log: recorded steps replay without re-execution, divergence detection, torn-tail recovery and terminal states
+## Data Layout
 
-## Shape
+Runs reside inside a caller-specified directory with two files per run:
+- `<directory>/<run_id>.jsonl`: Append-only newline-delimited JSON entries.
+- `<directory>/<run_id>.lock`: Lock file opened with `os.O_CREAT | os.O_EXCL`.
 
-```text
-caller code --> agent_checkpoint (public API in __init__.py)
-                    |
-                    +-- pure functions, no I/O, no global state
+Run IDs match `^[A-Za-z0-9_-]{1,64}$`, forbidding path traversal (`../`) and illegal filesystem characters.
+
+## Log Format
+
+Entries are written with `v: 1` versioning and serialized canonically using sorted keys, no whitespace, and `allow_nan=False`.
+
+### Step Record
+```json
+{"hash":"<sha256>","i":0,"name":"fetch","output":"data","v":1}
 ```
 
-- **Public API**: the names listed in `__all__` of `src/agent_checkpoint/__init__.py`. Anything else is
-  internal and may change without a major version.
-- **Errors**: invalid input raises built-in exceptions (`ValueError`, `TypeError`) with a clear
-  message; the library never prints or exits.
-- **Side effects**: none. If a feature needs I/O, isolate it in its own module behind a small
-  interface and record the choice in an ADR.
+### Terminal Records
+```json
+{"result":"done","status":"completed","v":1}
+{"code":"tool_error","status":"failed","v":1}
+```
 
-## Quality contract
+## Canonical Hash
 
-`scripts/check.py` is the single definition of the gates; `fabrica.json` tells the factory and CI
-how to run it. See [TESTING.md](TESTING.md).
+Step hashing computes the SHA-256 digest of canonical JSON for `[name, inputs]`. Floats and ints preserve their canonical string representations (e.g. `1` vs `1.0`), meaning different numeric representations hash differently.
 
-## Decisions
+## Divergence & Truncation
 
-Architecture decisions are recorded in [decisions/](decisions/) as numbered ADRs.
+When a run is resumed, step calls indexed at `k` compare `(name, hash)` against recorded history. If they match, the stored output is returned immediately without invoking the step's callback.
+
+If they differ:
+- With `on_divergence="raise"` (default), a `CheckpointError(code="divergence", step_index=k)` is raised.
+- With `on_divergence="truncate"`, the log is rewritten atomically via a temporary file and `os.replace` up to step `k`, discarding subsequent steps, and the live step executes.
+
+## Torn Tail Recovery
+
+If a process terminates mid-write, the final line may lack a trailing newline and fail JSON parsing. On initial read, `RunLog` detects this partial tail and truncates the file back to the last valid byte offset before appending new entries.
