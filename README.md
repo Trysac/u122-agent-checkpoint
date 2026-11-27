@@ -10,8 +10,10 @@ Long agent runs fail halfway through on a timeout or a crash, and restarting the
 
 ## Installation
 
+Not published to PyPI yet. Install it from GitHub:
+
 ```bash
-pip install trysac-agent-checkpoint
+pip install "git+https://github.com/Trysac/u122-agent-checkpoint"
 ```
 
 ## Usage Example
